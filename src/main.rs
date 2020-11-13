@@ -46,24 +46,6 @@ async fn game_input_handler(mut rx: Receiver<u8>, mut game_stdin: ChildStdin) {
     }
 }
 
-// this task reads keystrokes from the user/terminal input,
-// and relays them to the handler for the game input, via mpsc channel
-fn user_input_handler(mut user_stdin: Stdin, tx: Sender<u8>) {
-    let mut buffer: [u8; 4096] = [0; 4096];
-
-    while let Ok(length) = user_stdin.read(&mut buffer) {
-        if length == 0 { return; }
-        let mut index = 0;
-        while index < length {
-            if let Err(_) = tx.blocking_send(buffer[index]) {
-                return;
-            } else {
-                index += 1;
-            }
-        }
-    }
-}
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut cmd = Command::new("ssh");
@@ -76,7 +58,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // the terminal if this process is invoked from the command line).
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
-    cmd.stdin(Stdio::piped());
+    //cmd.stdin(Stdio::piped());
 
     let mut child = cmd.spawn()
         .expect("failed to spawn command");
@@ -86,16 +68,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .expect("child did not have a handle to stdout");
     //let mut child_stderr = child.stderr.take()
     //    .expect("child did not have a handle to stderr");
-    let child_stdin = child.stdin.take()
-        .expect("child did not have a handle to stderr");
+    //let child_stdin = child.stdin.take()
+    //    .expect("child did not have a handle to stderr");
 
     // set up channel for handler of input TO game
-    let (tx, rx) = channel(100);
-    task::spawn(game_input_handler(rx, child_stdin));
-
-    // set up handler for I/O input from terminal/user
-    let mut stdin = stdin();
-    task::spawn_blocking(move || user_input_handler(stdin, tx.clone()));
+    //let (tx, rx) = channel(100);
+    //task::spawn(game_input_handler(rx, child_stdin));
 
     // the 'main' task simply reads data from the child's standard output,
     // relays it to our parent stdout *and* our game watcher task
