@@ -8,7 +8,6 @@ use tokio::sync::mpsc::{Sender, Receiver, channel};
 use tokio::task;
 use std::process::Stdio;
 use std::io::{Read, Write, Stdout, stdout};
-use std::sync::Arc;
 use termion::async_stdin;
 use termion::raw::{RawTerminal, IntoRawMode};
 use termion::AsyncReader as TermReader;
@@ -67,7 +66,7 @@ fn copy_buf(buffer: &[u8], length: usize) -> Vec<u8> {
 }
 
 // handler for output to terminal
-async fn game_output_handler(mut game_stdout: ChildStdout, raw_stdout: Arc<RawTerminal<Stdout>>) {
+async fn game_output_handler(mut game_stdout: ChildStdout) {
     let mut buffer: [u8; 4096] = [0; 4096];
     let mut reader = BufReader::new(game_stdout);
 
@@ -77,10 +76,10 @@ async fn game_output_handler(mut game_stdout: ChildStdout, raw_stdout: Arc<RawTe
             return;
         }
         let vec_copy = copy_buf(&buffer, n_read);
-        let stdout_clone = Arc::clone(&raw_stdout);
+        let mut stdout = stdout().into_raw_mode().unwrap();
         task::spawn_blocking(move || {
-            stdout_clone.write(&vec_copy);
-            stdout_clone.flush();
+            stdout.write(&vec_copy);
+            stdout.flush();
         });
     }
 }
@@ -140,7 +139,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // spawn_blocking() calls for sending output to the screen :/
     // may also be possible to use a blocking thread for all I/O
     // going towards the output... will think about this
-    let mut stdout = Arc::new(stdout().into_raw_mode().unwrap());
+    let mut stdout = stdout().into_raw_mode().unwrap();
 
     // set up channel for handler of input TO game
     let (tx, rx) = channel(100);
@@ -150,10 +149,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut term_stdin = async_stdin();
     task::spawn(user_input_handler(term_stdin, tx));
 
-    // set up handler for terminal output, forwarded
-    // from game stdout to the main terminal
-    task::spawn(game_output_handler(child_stdout, stdout));
-
     // Ensure the child process is spawned in the runtime so it can
     // make progress on its own while we await for any output.
     task::spawn(async move {
@@ -162,6 +157,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         println!("child status was: {}", status);
     });
+
+    // set up handler for terminal output, forwarded
+    // from game stdout to the main terminal
+    game_output_handler(child_stdout).await;
 
     Ok(())
 }
