@@ -7,10 +7,11 @@ use tokio::process::{Command, ChildStdin, ChildStdout};
 use tokio::sync::mpsc::{Sender, Receiver, channel};
 use tokio::task;
 use std::process::Stdio;
-use std::io::{Read, Write, Stdout, stdout};
-use termion::async_stdin;
+use std::io::{Read, Write, Stdout, stdout, Stdin, stdin};
+use termion::{async_stdin, terminal_size};
 use termion::raw::{RawTerminal, IntoRawMode};
-use termion::AsyncReader as TermReader;
+//use termion::AsyncReader as TermReader;
+use termion::input::TermReadEventsAndRaw;
 
 // we'll want a spawned task with an mpsc receiver
 // user input will be sent across the channel, and the
@@ -40,16 +41,16 @@ async fn game_input_handler(mut rx: Receiver<u8>, mut game_stdin: ChildStdin) {
                 if let Ok(n_bytes) = game_stdin.write(&buffer[write_cursor .. read_index]).await {
                     write_cursor += n_bytes;
                 } else {
-                    warn!("write to child's stdin failed");
+                    panic!("write to child's stdin failed");
                     return;
                 }
             }
             if let Err(_) = game_stdin.flush().await {
-                warn!("flush child's stdin failed");
+                panic!("flush child's stdin failed");
                 return;
             }
         } else {
-            warn!("receiving from channel failed");
+            panic!("receiving from channel failed");
             return;
         }
     }
@@ -72,7 +73,7 @@ async fn game_output_handler(mut game_stdout: ChildStdout) {
 
     while let Ok(n_read) = reader.read(&mut buffer).await {
         if n_read == 0 { // EOF
-            warn!("got EOF on child's output");
+            panic!("got EOF on child's output");
             return;
         }
         let vec_copy = copy_buf(&buffer, n_read);
@@ -84,27 +85,17 @@ async fn game_output_handler(mut game_stdout: ChildStdout) {
     }
 }
 
-async fn user_input_handler(mut term_input: TermReader, tx: Sender<u8>) {
-    let mut buffer: [u8; 4096] = [0; 4096];
-
-    loop {
-        // this may be a bit of a busy loop if we don't
-        // occasionally yield - apparently yielding will put
-        // us at the back of the queue but we don't necessarily
-        // need special waking
-        if let Ok(bytes_read) = term_input.read(&mut buffer) {
-            if bytes_read == 0 { warn!("EOF on term input"); continue; } // EOF
-            let mut index = 0;
-            while index < bytes_read {
-                if let Err(_) = tx.send(buffer[index]).await {
-                    warn!("send to channel failed");
-                    return;
-                } else {
-                    index += 1;
+fn user_input_handler(mut stdin: Stdin, tx: Sender<u8>) {
+    for event in stdin.events_and_raw() {
+        if let Ok((_, byte_vec)) = event {
+            for byte in byte_vec.iter() {
+                if let Err(_) = tx.blocking_send(*byte) {
+                    panic!("sending user input to channel failed");
                 }
             }
+        } else {
+            panic!("getting user input failed");
         }
-        task::yield_now().await;
     }
 }
 
@@ -112,6 +103,10 @@ async fn user_input_handler(mut term_input: TermReader, tx: Sender<u8>) {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut cmd = Command::new("ssh");
     cmd.arg("hfe");
+    // terminal size is what
+    let (width, height) = terminal_size().unwrap();
+    println!("terminal size: {} by {}", width, height);
+    //return Ok(());
 
     // Specify that we want the command's standard output piped back to us.
     // By default, standard input/output/error will be inherited from the
@@ -146,8 +141,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     task::spawn(game_input_handler(rx, child_stdin));
 
     // set up handler for terminal input from user
-    let mut term_stdin = async_stdin();
-    task::spawn(user_input_handler(term_stdin, tx));
+    let mut stdin = stdin();
+    task::spawn_blocking(move || {
+        user_input_handler(stdin, tx.clone())
+    });
 
     // Ensure the child process is spawned in the runtime so it can
     // make progress on its own while we await for any output.
