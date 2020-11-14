@@ -134,7 +134,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // spawn_blocking() calls for sending output to the screen :/
     // may also be possible to use a blocking thread for all I/O
     // going towards the output... will think about this
-    let mut stdout = stdout().into_raw_mode().unwrap();
+    let mut stdout = stdout();//.into_raw_mode().unwrap();
 
     // set up channel for handler of input TO game
     let (tx, rx) = channel(100);
