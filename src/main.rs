@@ -17,48 +17,50 @@
 
 extern crate pty;
 
-use std::io::{self, Read, Write, Result};
+use std::io::{Read, Write, Result, stdout};
 use std::process::{Command};
-
+use termion::raw::{RawTerminal, IntoRawMode};
 use pty::fork::Fork;
 
 fn main() -> Result<()> {
-  let fork = Fork::from_ptmx().unwrap();
+    let mut stdout = stdout().into_raw_mode().unwrap();
+    let fork = Fork::from_ptmx().unwrap();
 
-  if let Some(mut terminal) = fork.is_parent().ok() {
-    // Read output via PTY master
-    let mut output = String::new();
+    if let Some(mut terminal) = fork.is_parent().ok() {
+        // Read output via PTY master
+        let mut output = String::new();
 
-    let our_pty = match terminal.read_to_string(&mut output) {
-        Ok(_nread) => {
-            println!("child tty is: {}", output.trim());
-            Some(output.trim())
-        },
-        Err(e)     => {
-            panic!("read error: {}", e);
-            // unreachable expression - I don't fool the compiler :D None
-        }
-    };
+        //let our_pty = match terminal.read_to_string(&mut output) {
+        //    Ok(_nread) => {
+        //        println!("child tty is: {}", output.trim());
+        //        Some(output.trim())
+        //    },
+        //    Err(e)     => {
+        //        panic!("read error: {}", e);
+        //        // unreachable expression - I don't fool the compiler :D None
+        //    }
+        //};
 
-    // continue reading, and copy raw to our stdout
-    loop {
-        let mut buffer: [u8; 4096] = [0; 4096];
-        match terminal.read(&mut buffer) {
-            Ok(n) => {
-                io::stdout().write_all(&mut buffer[..n])?;
-            },
-            Err(e) => {
-                println!("error reading output sent to {}: {}", our_pty.unwrap(), e);
-                return Err(e);
+        // continue reading, and copy raw to our stdout
+        loop {
+            let mut buffer: [u8; 4096] = [0; 4096];
+            match terminal.read(&mut buffer) {
+                Ok(n) => {
+                    if n == 0 { break }
+                    write!(stdout, "{}", String::from_utf8_lossy(&mut buffer[..n]))?;
+                },
+                Err(e) => {
+                    //println!("error reading output sent to {}: {}", our_pty.unwrap(), e);
+                    println!("error reading output sent our tty: {}", e);
+                    return Err(e);
+                }
             }
         }
+    } else {
+        // Child process just exec `tty`
+        //Command::new("tty").status().expect("could not execute tty");
+        Command::new("stty").arg("-a").status().expect("could not execute stty -a");
+        //Command::new("ssh").arg("hfe").status().expect("could not execute `stty -a`"); 
     }
-  }
-  else {
-    // Child process just exec `tty`
-    Command::new("tty").status().expect("could not execute tty");
-    Command::new("nethack").status().expect("could not execute nethack");
-    //Command::new("ssh").arg("hfe").status().expect("could not execute `stty -a`"); 
-  }
-  Ok(())
+    Ok(())
 }
