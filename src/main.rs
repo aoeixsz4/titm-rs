@@ -56,7 +56,9 @@ fn main() -> Result<()> {
   }
   else {
     // Child process just exec `tty`
-    Command::new("tty").status().expect("could not execute tty"); 
+    Command::new("tty").status().expect("could not execute tty");
+    Command::new("nethack").status().expect("could not execute nethack");
+    //Command::new("ssh").arg("hfe").status().expect("could not execute `stty -a`"); 
   }
   Ok(())
 }
