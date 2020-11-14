@@ -17,18 +17,21 @@
 
 extern crate pty;
 
-use std::io::{Read, Write, Result, stdout};
+use std::io::{Read, Write, Result, stdin, stdout};
 use std::process::{Command};
-use termion::raw::{RawTerminal, IntoRawMode};
+use std::thread;
+use termion::raw::IntoRawMode;
+use termion::input::TermReadEventsAndRaw;
 use pty::fork::Fork;
 
 fn main() -> Result<()> {
     let mut stdout = stdout().into_raw_mode().unwrap();
+    let stdin = stdin();
     let fork = Fork::from_ptmx().unwrap();
 
     if let Some(mut terminal) = fork.is_parent().ok() {
         // Read output via PTY master
-        let mut output = String::new();
+        let output = String::new();
 
         //let our_pty = match terminal.read_to_string(&mut output) {
         //    Ok(_nread) => {
@@ -41,6 +44,19 @@ fn main() -> Result<()> {
         //    }
         //};
 
+        // spawn a background thread to deal with the input
+        
+        let input_handler = thread::spawn(move || {
+            // loop over events on the term input,(_eventkey, bytevec)
+            // forward keys to child process
+            for event in stdin.events_and_raw() {
+                if let Ok((_event, byte_vector)) = event {
+                    terminal.write_all(&byte_vector);
+                    terminal.flush();
+                }
+            }
+        });
+
         // continue reading, and copy raw to our stdout
         loop {
             let mut buffer: [u8; 4096] = [0; 4096];
@@ -48,6 +64,7 @@ fn main() -> Result<()> {
                 Ok(n) => {
                     if n == 0 { break }
                     write!(stdout, "{}", String::from_utf8_lossy(&mut buffer[..n]))?;
+                    stdout.flush();
                 },
                 Err(e) => {
                     //println!("error reading output sent to {}: {}", our_pty.unwrap(), e);
@@ -59,8 +76,8 @@ fn main() -> Result<()> {
     } else {
         // Child process just exec `tty`
         //Command::new("tty").status().expect("could not execute tty");
-        Command::new("stty").arg("-a").status().expect("could not execute stty -a");
-        //Command::new("ssh").arg("hfe").status().expect("could not execute `stty -a`"); 
+        //Command::new("stty").arg("-a").status().expect("could not execute stty -a");
+        Command::new("nethack").status().expect("could not execute local nethack"); 
     }
     Ok(())
 }
