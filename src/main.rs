@@ -20,6 +20,7 @@ extern crate pty;
 use std::io::{Read, Write, Result, stdin, stdout};
 use std::process::{Command};
 use std::thread;
+use std::time::Duration;
 use termion::raw::IntoRawMode;
 use termion::input::TermReadEventsAndRaw;
 use pty::fork::Fork;
@@ -54,6 +55,7 @@ fn main() -> Result<()> {
                     terminal.write_all(&byte_vector);
                     terminal.flush();
                 }
+                thread::sleep(Duration::from_millis(100));
             }
         });
 
@@ -72,12 +74,15 @@ fn main() -> Result<()> {
                     return Err(e);
                 }
             }
+            thread::sleep(Duration::from_millis(100));
         }
     } else {
         // Child process just exec `tty`
         //Command::new("tty").status().expect("could not execute tty");
         //Command::new("stty").arg("-a").status().expect("could not execute stty -a");
-        Command::new("nethack").status().expect("could not execute local nethack"); 
+        //Command::new("nethack").status().expect("could not execute local nethack");
+        Command::new("ssh").arg("hdf").status().expect("could not execute local nethack"); 
+
     }
     Ok(())
 }
