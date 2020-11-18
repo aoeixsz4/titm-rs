@@ -673,7 +673,11 @@ impl GameScreen {
     }
 
     fn cursor_up(&mut self, count: usize) {
-        self.cursor.y -= count;
+        if self.cursor.y >= count {
+            self.cursor.y -= count;
+        } else {
+            self.cursor.y = 0;
+        }
     }
 
     fn cursor_down(&mut self, count: usize) {
@@ -692,7 +696,11 @@ impl GameScreen {
     }
 
     fn cursor_back(&mut self, count: usize) {
-        self.cursor.x -= count;
+        if count > self.cursor.x {
+            self.cursor.x = 0;
+        } else {
+            self.cursor.x -= count;
+        }
     }
 
     fn cursor_next_line(&mut self, count: usize) {
