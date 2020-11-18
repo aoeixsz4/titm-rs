@@ -41,6 +41,7 @@ pub struct Position {
     y: usize
 }
 
+#[derive(Clone)]
 enum Dir {
     Left,
     Down,
@@ -57,7 +58,7 @@ enum CharMap {
     User
 }
 
-
+#[derive(Clone)]
 pub struct ScrSize {
     width: usize,
     height: usize
@@ -189,6 +190,7 @@ pub trait ExtractLines {
     }
 }
 
+#[derive(Clone)]
 pub struct SubWindow {
     origin: Position,
     size: ScrSize,
@@ -241,9 +243,9 @@ pub trait ExtractWindows {
 
     fn follow_border(&self, row: usize, col: usize) -> Result<ScrSize> {
         // first follow along the top
-        let mut direction = Dir::Left;
         let mut scan = Position { y: row, x: col };
         let mut box_size = ScrSize { height: 0, width: 0 };
+        let (height, width) = self.get_size();
 
         let top_left = self.get_char_at_pos(scan.y, scan.x)?;
 
@@ -251,34 +253,104 @@ pub trait ExtractWindows {
             return Err(Box::new(ScrErr::BoxInvalid(scan.y, scan.x)));
         }
 
-        scan.x += 1;
+        let mut forward= true;
+        let mut border_char = self.get_char_at_pos(scan.y, scan.x)?;
+        let mut prev_border_char;
         loop {
-            let border_char = self.get_char_at_pos(scan.y, scan.x)?;
-            match border_char {
-                '─' => (),
-                '┐' => { direction = Dir::Down },
-                '│' => (),
-                '┘' => {
-                    direction = Dir::Right;
+            prev_border_char = border_char;
+            match prev_border_char {
+                '┌' if forward => {
+                    scan.x += 1;
+                    if scan.x > width {
+                        return Err(Box::new(ScrErr::OutofBounds(scan.y, scan.x)));
+                    }
+                    border_char = self.get_char_at_pos(scan.y, scan.x)?;
+                    if ! (border_char == '─' || border_char == '┐') {
+                        return Err(Box::new(ScrErr::BrokenBorder));
+                    }
+                },
+                '─' if forward => {
+                    scan.x += 1;
+                    if scan.x > width {
+                        return Err(Box::new(ScrErr::OutofBounds(scan.y, scan.x)));
+                    }
+                    border_char = self.get_char_at_pos(scan.y, scan.x)?;
+                    if ! (border_char == '─' || border_char == '┐') {
+                        return Err(Box::new(ScrErr::BrokenBorder));
+                    }
+                },
+                '┐' if forward => {
+                    scan.y += 1;
+                    if scan.y > height {
+                        return Err(Box::new(ScrErr::OutofBounds(scan.y, scan.x)));
+                    }
+                    border_char = self.get_char_at_pos(scan.y, scan.x)?;
+                    if ! (border_char == '│' || border_char == '┘') {
+                        return Err(Box::new(ScrErr::BrokenBorder));
+                    }
+                },
+                '│' if forward => {
+                    scan.y += 1;
+                    if scan.y > height {
+                        return Err(Box::new(ScrErr::OutofBounds(scan.y, scan.x)));
+                    }
+                    border_char = self.get_char_at_pos(scan.y, scan.x)?;
+                    if ! (border_char == '│' || border_char == '┘') {
+                        return Err(Box::new(ScrErr::BrokenBorder));
+                    }
+                },
+                '┘' if forward => {
+                    forward = false;
 
-                    // assign as the internal size
+                    // save box size
                     box_size.height = (scan.y - row) - 1;
                     box_size.width = (scan.x - col) - 1;
+
+                    scan.x -= 1;
+                    if scan.x < 1 {
+                        return Err(Box::new(ScrErr::OutofBounds(scan.y, scan.x)));
+                    }
+                    border_char = self.get_char_at_pos(scan.y, scan.x)?;
+                    if ! (border_char == '─' || border_char == '└') {
+                        return Err(Box::new(ScrErr::BrokenBorder));
+                    }
                 },
-                '└' => { direction = Dir::Up },
-                '┌' => {
-                    // full circle!!
+                '─' if ! forward => {
+                    scan.x -= 1;
+                    if scan.x < 1 {
+                        return Err(Box::new(ScrErr::OutofBounds(scan.y, scan.x)));
+                    }
+                    border_char = self.get_char_at_pos(scan.y, scan.x)?;
+                    if ! (border_char == '─' || border_char == '└') {
+                        return Err(Box::new(ScrErr::BrokenBorder));
+                    }
+                },
+                '└' if ! forward => {
+                    scan.y -= 1;
+                    if scan.y < 1 {
+                        return Err(Box::new(ScrErr::OutofBounds(scan.y, scan.x)));
+                    }
+                    border_char = self.get_char_at_pos(scan.y, scan.x)?;
+                    if ! (border_char == '│' || border_char == '┌') {
+                        return Err(Box::new(ScrErr::BrokenBorder));
+                    }
+                },
+                '│' if ! forward => {
+                    scan.y -= 1;
+                    if scan.y < 1 {
+                        return Err(Box::new(ScrErr::OutofBounds(scan.y, scan.x)));
+                    }
+                    border_char = self.get_char_at_pos(scan.y, scan.x)?;
+                    if ! (border_char == '│' || border_char == '┌') {
+                        return Err(Box::new(ScrErr::BrokenBorder));
+                    }
+                },
+                '┌' if ! forward => {
                     if scan.y == row && scan.x == col {
                         return Ok(box_size);
                     }
-                }
+                },
                 _ => return Err(Box::new(ScrErr::BrokenBorder))
-            }
-            match direction {
-                Dir::Left => scan.x += 1,
-                Dir::Down => scan.y += 1,
-                Dir::Right => scan.x -= 1,
-                Dir::Up => scan.y -= 1
             }
         }
     }
@@ -318,6 +390,12 @@ pub trait ExtractWindows {
             }
         }
 
+        // sometimes the message window isn't properly boxed,
+        // but we can check whether a section of the screen doesn't
+        // have it's own proper boxing
+        let mut min_border_row = height;
+        let mut min_border_col = width;
+
         // confirm contiguous boxes & copy text
         for (row, col) in main_corners {
             if let Ok(box_size) = self.follow_border(row, col) {
@@ -332,6 +410,31 @@ pub trait ExtractWindows {
                     grid
                 });
             }
+            if row < min_border_row {
+                min_border_row = row;
+            }
+            if col < min_border_col {
+                min_border_col = col;
+            }
+        }
+
+        if min_border_row > 1 && min_border_col > 1 {
+            let size = ScrSize {
+                height: min_border_row - 1,
+                width: min_border_col - 1
+            };
+            let mut grid = vec![vec![0 as char; size.width]; size.height];
+            let origin = Position {
+                y: 1,
+                x: 1
+            };
+            self.copy_data(&origin, &size, &mut grid)?;
+            boxes.push(SubWindow
+            {
+                origin,
+                size,
+                grid
+            });
         }
 
         Ok(boxes)
@@ -533,6 +636,7 @@ impl GameScreen {
                 b'H' | b'f' => self.cursor_set_position(args[0], args[1]),
                 b'J' => self.erase_display(args[0]),
                 b'K' => self.erase_inline(args[0]),
+                b'X' => self.erase_chars(args[0]),
                 b'm' => (), // ignore colours
                 _ => ()
             }
@@ -671,6 +775,12 @@ impl GameScreen {
         }
     }
 
+    fn erase_chars(&mut self, nr_chars: usize) {
+        for i in 0 .. nr_chars {
+            self.put_char(' ');
+        }
+    }
+
     fn clear_line(&mut self, line_index: usize) {
         for i in 0 .. self.size.width {
             self.grid[line_index][i] = '\0';
@@ -729,11 +839,26 @@ impl NetHackData {
     }
 
     pub fn update(&mut self, term: &GameScreen) -> Result<()> {
+        self.windows.clear();
         let sub_windows = term.get_subwindows()?;
         for window in sub_windows {
             self.windows.push(window);
         }
         Ok(())
+    }
+
+    pub fn debug(&self, stderr: &mut Stderr) {
+        let mut window_nr = 1;
+
+        for win in self.windows.clone() {
+            write!(stderr, "this is the {}th window\n", window_nr);
+            if let Ok(line_vec) = win.get_lines() {
+                for line in line_vec {
+                    write!(stderr, "{}\n", line);
+                }
+            }
+            window_nr += 1;
+        }
     }
 }
 
@@ -795,10 +920,13 @@ fn main() -> Result<()> {
                     //for i in 0 .. n {
                     //    write!(stderr, "{:#x} ", buffer[i]);
                     //}
-                    //write!(stderr, "{}", String::from_utf8_lossy(&mut buffer[..n]))?;
-                    //stderr.flush();
+
+                    write!(stderr, "{}", String::from_utf8_lossy(&mut buffer[..n]))?;
+                    stderr.flush();
                     game_term.update(&buffer[..n]);
+                    game_term.dump(&mut stderr);
                     nethack.update(&game_term);
+                    nethack.debug(&mut stderr);
                 },
                 Err(e) => {
                     //println!("error reading output sent to {}: {}", our_pty.unwrap(), e);
