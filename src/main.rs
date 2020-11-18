@@ -19,6 +19,7 @@ extern crate nix;
 extern crate termion;
 
 use std::error;
+use std::fmt;
 use std::io::{Write, stdin, stdout, stderr, Stderr};
 use std::process::Command;
 use std::thread;
@@ -35,9 +36,16 @@ use termion::{terminal_size, terminal_size_pixels};
 type Result<T> = std::result::Result<T, Box<dyn error::Error>>;
 
 #[derive(Clone)]
-struct Position {
+pub struct Position {
     x: usize,
     y: usize
+}
+
+enum Dir {
+    Left,
+    Down,
+    Right,
+    Up
 }
 
 #[derive(Clone)]
@@ -50,7 +58,7 @@ enum CharMap {
 }
 
 
-struct Size {
+pub struct ScrSize {
     width: usize,
     height: usize
 }
@@ -86,7 +94,7 @@ struct ScreenState {
 
 struct GameScreen {
     cursor: Position,
-    size: Size,
+    size: ScrSize,
     charset: CharMap,
     mapg0: CharMap,
     mapg1: CharMap,
@@ -95,8 +103,24 @@ struct GameScreen {
     grid: Vec<Vec<char>>,
     savestate: ScreenState
 }
+#[derive(Debug)]
+pub enum ScrErr {
+    BoxInvalid(usize, usize),
+    BrokenBorder,
+    OutofBounds(usize, usize)
+}
 
+impl fmt::Display for ScrErr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            ScrErr::BoxInvalid(row, col) => write!(f, "row {}, col {} is not a valid box start position", row, col),
+            ScrErr::BrokenBorder => write!(f, "box borders broken/incomplete"),
+            ScrErr::OutofBounds(row, col) => write!(f, "row {}, col {} is out of bounds", row, col)
+        }
+    }
+}
 
+impl error::Error for ScrErr {}
 
 fn convert_vt(text: char) -> char {
     match text {
@@ -117,6 +141,203 @@ fn convert_vt(text: char) -> char {
     }
 }
 
+pub trait ExtractLines {
+    fn get_size(&self) -> (usize, usize);
+    fn get_char_at_pos(&self, row: usize, col: usize) -> Result<char>;
+
+    fn rest_null_ln(&self, row: usize, col: usize) -> bool {
+        let (height, width) = self.get_size();
+
+        assert!(row <= height);
+        let mut index = col;
+        while index <= width {
+            if self.get_char_at_pos(row, index).unwrap() != '\0' {
+                return false;
+            }
+            index += 1;
+        }
+        true
+    }
+
+    fn get_lines(&self) -> Result<Vec<String>> {
+        let (height, width) = self.get_size();
+        let mut row= 1;
+        let mut out = Vec::new();
+
+        while row <= height {
+            let mut col = 1;
+            let mut line = String::new();
+            while col <= width {
+                let c = self.get_char_at_pos(row, col)?;
+                match c {
+                    '\0' => {
+                        if self.rest_null_ln(row, col) {
+                            break;
+                        } else {
+                            line.push(' ');
+                        }
+                    },
+                    _ => line.push(c)
+                }
+                col += 1;
+            }
+            out.push(line);
+            row += 1;
+        }
+
+        Ok(out)
+    }
+}
+
+pub struct SubWindow {
+    origin: Position,
+    size: ScrSize,
+    grid: Vec<Vec<char>>
+}
+
+impl ExtractLines for SubWindow {
+    fn get_size(&self) -> (usize, usize) {
+        (self.size.height, self.size.width)
+    }
+
+    fn get_char_at_pos(&self, row: usize, col: usize) -> Result<char> {
+        if row <= self.size.height && col <= self.size.width {
+            Ok(self.grid[row-1][col-1])
+        } else {
+            Err(Box::new(ScrErr::OutofBounds(row, col)))
+        }
+    }
+}
+
+pub trait ExtractWindows {
+    fn get_size(&self) -> (usize, usize);
+    fn get_char_at_pos(&self, row: usize, col: usize) -> Result<char>;
+
+    fn contains_curses_windows(&self) -> bool {
+        let mut scan = Position { y: 1, x: 1 };
+        let (height, width) = self.get_size();
+
+        while scan.y <= height {
+            match self.get_char_at_pos(scan.y, scan.x) {
+                Ok('┘') => return true,
+                Ok('┐') => return true,
+                Ok('┌') => return true,
+                Ok('└') => return true,
+                Ok('─') => return true,
+                Ok('│') => return true,
+                Ok(_) => {
+                    scan.x += 1;
+                    if scan.x > width {
+                        scan.y += 1;
+                        scan.x = 1;
+                    }
+                },
+                Err(_) => return false
+            }
+        }
+
+        false
+    }
+
+    fn follow_border(&self, row: usize, col: usize) -> Result<ScrSize> {
+        // first follow along the top
+        let mut direction = Dir::Left;
+        let mut scan = Position { y: row, x: col };
+        let mut box_size = ScrSize { height: 0, width: 0 };
+
+        let top_left = self.get_char_at_pos(scan.y, scan.x)?;
+
+        if top_left != '┌' {
+            return Err(Box::new(ScrErr::BoxInvalid(scan.y, scan.x)));
+        }
+
+        scan.x += 1;
+        loop {
+            let border_char = self.get_char_at_pos(scan.y, scan.x)?;
+            match border_char {
+                '─' => (),
+                '┐' => { direction = Dir::Down },
+                '│' => (),
+                '┘' => {
+                    direction = Dir::Right;
+
+                    // assign as the internal size
+                    box_size.height = (scan.y - row) - 1;
+                    box_size.width = (scan.x - col) - 1;
+                },
+                '└' => { direction = Dir::Up },
+                '┌' => {
+                    // full circle!!
+                    if scan.y == row && scan.x == col {
+                        return Ok(box_size);
+                    }
+                }
+                _ => return Err(Box::new(ScrErr::BrokenBorder))
+            }
+            match direction {
+                Dir::Left => scan.x += 1,
+                Dir::Down => scan.y += 1,
+                Dir::Right => scan.x -= 1,
+                Dir::Up => scan.y -= 1
+            }
+        }
+    }
+
+    fn copy_data(&self, origin: &Position, size: &ScrSize, dest_grid: &mut Vec<Vec<char>>) -> Result<()> {
+        let mut scan = Position { y: 0, x: 0 };
+
+        while scan.y < size.height {
+            dest_grid[scan.y][scan.x] = self.get_char_at_pos(origin.y + scan.y, origin.x + scan.x)?;
+            scan.x += 1;
+            if scan.x >= size.width {
+                scan.x = 0;
+                scan.y += 1;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn get_subwindows(&self) -> Result<Vec<SubWindow>> {
+        let mut scan = Position { y: 1, x: 1 };
+        let (height, width) = self.get_size();
+        let mut main_corners = Vec::new();
+        let mut boxes = Vec::new();
+
+        // search for top-left ┌ box-pieces
+        while scan.y <= height {
+            if let Ok(c) = self.get_char_at_pos(scan.y, scan.x) {
+                if c == '┌' {
+                    main_corners.push((scan.y, scan.x));
+                }
+                scan.x += 1;
+                if scan.x > width {
+                    scan.y += 1;
+                    scan.x = 1;
+                }
+            }
+        }
+
+        // confirm contiguous boxes & copy text
+        for (row, col) in main_corners {
+            if let Ok(box_size) = self.follow_border(row, col) {
+                let mut grid = vec![vec![0 as char; box_size.width]; box_size.height];
+                let origin = Position { y: (row + 1), x: (col + 1) };
+                self.copy_data(&origin, &box_size, &mut grid)?;
+
+                boxes.push(SubWindow
+                {
+                    origin,
+                    size: box_size,
+                    grid
+                });
+            }
+        }
+
+        Ok(boxes)
+    }
+}
+
 impl GameScreen {
     pub fn new(width: usize, height: usize) -> Self {
         let grid = vec![vec![0 as char; width]; height];
@@ -124,7 +345,7 @@ impl GameScreen {
             x: 0,
             y: 0
         };
-        let size = Size {
+        let size = ScrSize {
             width: width,
             height: height
         };
@@ -475,6 +696,47 @@ impl GameScreen {
     }
 }
 
+
+impl ExtractWindows for GameScreen {
+    fn get_size(&self) -> (usize, usize) {
+        (self.size.height, self.size.width)
+    }
+
+    fn get_char_at_pos(&self, row: usize, col: usize) -> Result<char> {
+        if row <= self.size.height && col <= self.size.width {
+            Ok(self.grid[row-1][col-1])
+        } else {
+            Err(Box::new(ScrErr::OutofBounds(row, col)))
+        }
+    }
+}
+
+//struct NHMap {
+//}
+
+struct NetHackData {
+    windows: Vec<SubWindow>,
+    //level_map: NHMap,
+    //inventory: NHInv,
+    //status: NHStats
+}
+
+impl NetHackData {
+    pub fn new() -> Self {
+        NetHackData {
+            windows: Vec::new()
+        }
+    }
+
+    pub fn update(&mut self, term: &GameScreen) -> Result<()> {
+        let sub_windows = term.get_subwindows()?;
+        for window in sub_windows {
+            self.windows.push(window);
+        }
+        Ok(())
+    }
+}
+
 fn main() -> Result<()> {
     let (ws_col, ws_row) = terminal_size()?;
     let (ws_ypixel, ws_xpixel) = terminal_size_pixels()?;
@@ -484,7 +746,8 @@ fn main() -> Result<()> {
         ws_xpixel,
         ws_ypixel 
     };
-    let mut model = GameScreen::new(ws_col as usize, ws_row as usize);
+    let mut game_term = GameScreen::new(ws_col as usize, ws_row as usize);
+    let mut nethack = NetHackData::new();
     let fork = forkpty(Some(&win_size), None)?;
 
     if fork.fork_result.is_parent() {
@@ -522,7 +785,6 @@ fn main() -> Result<()> {
         });
 
         // continue reading, and copy raw to our stdout
-        //let mut loop_count = 0;
         loop {
             let mut buffer: [u8; 4096] = [0; 4096];
             match raw_read(raw_fd, &mut buffer) {
@@ -535,7 +797,8 @@ fn main() -> Result<()> {
                     //}
                     //write!(stderr, "{}", String::from_utf8_lossy(&mut buffer[..n]))?;
                     //stderr.flush();
-                    model.update(&buffer[..n]);
+                    game_term.update(&buffer[..n]);
+                    nethack.update(&game_term);
                 },
                 Err(e) => {
                     //println!("error reading output sent to {}: {}", our_pty.unwrap(), e);
@@ -545,12 +808,6 @@ fn main() -> Result<()> {
             }
             thread::sleep(Duration::from_millis(50));
             //write!(stderr, "\nabove was raw, below is a dump of the buffer\n");
-            //loop_count += 1;
-            //if loop_count >= 5 {
-            //    model.dump(&mut stderr);
-            //    stderr.flush();
-            //    return Ok(());
-            //}
         }
     } else {
         // Child process just exec `tty`
