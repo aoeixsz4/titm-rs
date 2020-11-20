@@ -21,10 +21,10 @@ extern crate terminal_emulator;
 mod term;
 use crate::term::{get_winsize, sizeinfo_from, PtyReader};
 use std::error;
-use std::io::{stdin, stdout, stderr};
+use std::io::{stdin, stdout};
 use std::process::Command;
 use std::thread;
-use std::time::Duration;
+//use std::time::Duration;
 use nix::unistd;
 use nix::pty::forkpty;
 use terminal_emulator::ansi::Processor;
@@ -41,18 +41,17 @@ fn main() -> Result<()> {
     if fork.fork_result.is_parent() {
         let mut stdout = stdout().into_raw_mode().unwrap();
         let stdin = stdin();
-        let mut stderr = stderr();
         let raw_fd = fork.master;
 
         let size_info = sizeinfo_from(win_size);
         let mut terminal = Term::new(size_info);
         let mut processor = Processor::new();
 
-        let mut child_stdout = PtyReader::new(raw_fd);
+        let child_stdout = PtyReader::new(raw_fd);
 
         // spawn a background thread to deal with the input
         
-        let _input_handler = thread::spawn(move || {
+        let _join_handler = thread::spawn(move || {
             // loop over events on the term input,(_eventkey, bytevec)
             // forward keys to child process
             for event in stdin.events_and_raw() {
@@ -60,7 +59,7 @@ fn main() -> Result<()> {
                     unistd::write(raw_fd, &byte_vector);
                     unistd::fsync(raw_fd);
                 }
-                thread::sleep(Duration::from_millis(50));
+                //thread::sleep(Duration::from_millis(50));
             }
         });
 
@@ -70,8 +69,10 @@ fn main() -> Result<()> {
         for c in child_stdout {
             // do stuff with received byte
             processor.advance(&mut terminal, c, &mut stdout);
-            thread::sleep(Duration::from_millis(50));
+            //thread::sleep(Duration::from_millis(50));
         }
+
+        Ok(())
     } else {
         // Child process just exec `tty`
         Command::new("tty").status().expect("could not execute tty");
@@ -79,8 +80,7 @@ fn main() -> Result<()> {
         //Command::new("nethack").status().expect("could not execute local nethack");
         //Command::new("ssh").arg("hdf").status().expect("could not execute local nethack");
         //Command::new("sh").status().expect("could not execute shell");
-
+        Ok(())
     }
-    Ok(())
 }
 
