@@ -88,15 +88,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rusty-scum"
-version = "0.1.0"
-dependencies = [
- "nix",
- "terminal-emulator",
- "termion",
-]
-
-[[package]]
 name = "static_assertions"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -127,6 +118,15 @@ dependencies = [
  "numtoa",
  "redox_syscall",
  "redox_termios",
+]
+
+[[package]]
+name = "titm"
+version = "0.1.0"
+dependencies = [
+ "nix",
+ "terminal-emulator",
+ "termion",
 ]
 
 [[package]]
