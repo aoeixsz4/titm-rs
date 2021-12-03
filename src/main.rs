@@ -21,24 +21,26 @@ extern crate terminal_emulator;
 mod term;
 use crate::term::{fork_terminal, TermFork};
 use std::error;
-use std::i64::MAX;
+use std::i32::MAX;
+use std::f64::MAX as MAX_FLOAT;
 use std::io::{stdin, stdout, stderr, Write, Stderr};
 use std::process::Command;
 use std::thread;
 //use std::time::Duration;
 use terminal_emulator::ansi::Processor;
 use terminal_emulator::term::Term;
+use termion::cursor;
 use termion::raw::IntoRawMode;
 use termion::input::TermReadEventsAndRaw;
 
 type Result<T> = std::result::Result<T, Box<dyn error::Error>>;
 
-fn get_box(term: &Term) -> (i64, i64, i64, i64) {
-    let (cursor_posy, cursor_posx) = (*term.cursor().point.line as i64, *term.cursor().point.col as i64);
+fn get_box(term: &Term) -> (i32, i32, i32, i32) {
+    let (cursor_posy, cursor_posx) = (*term.cursor().point.line as i32, *term.cursor().point.col as i32);
     let (mut north, mut east, mut south, mut west) = (MAX, -MAX, -MAX, MAX);
     let grid = term.grid();
     for cell in grid.display_iter() {
-        let (disty, distx) = (cursor_posy - *cell.line as i64, cursor_posx - *cell.column as i64);
+        let (disty, distx) = (cursor_posy - *cell.line as i32, cursor_posx - *cell.column as i32);
         match cell.c {
             '─' if disty > 0 && disty < north => north = disty,
             '─' if disty < 0 && disty > south => south = disty,
@@ -50,18 +52,26 @@ fn get_box(term: &Term) -> (i64, i64, i64, i64) {
     (north, south, east, west)
 }
 
-fn inspect_grid(term: &Term, stderr: &mut Stderr) -> Option<(i64, i64)> {
-    let (cursor_posy, cursor_posx) = (*term.cursor().point.line as i64, *term.cursor().point.col as i64);
+fn calculate_distance(disty: i32, distx: i32) -> f64 {
+    f64::from(disty).abs() / ((f64::from(disty).abs() / f64::from(distx).abs()).atan().sin())
+}
+
+fn get_wand_vector(term: &Term) -> Option<(i32, i32)> {
+    let (cursor_posy, cursor_posx) = (*term.cursor().point.line as i32, *term.cursor().point.col as i32);
+    let mut distance = MAX_FLOAT;
+    let mut result = None;
     let grid = term.grid();
     for cell in grid.display_iter() {
-        let mut buf = [0; 8];
-        stderr.write(cell.c.encode_utf8(&mut buf).as_bytes());
-        if *cell.column == 0 {
-            buf[0] = '\n' as u8;
-            stderr.write(&buf[..1]);
+        if cell.c == '/' {
+            let (dy, dx) = (cursor_posy - *cell.line as i32, cursor_posx - *cell.column as i32);
+            let d = calculate_distance(dy,dx);
+            if d < distance {
+                distance = d;
+                result = Some((dy, dx));
+            }
         }
     }
-    None
+    result
 }
 
 fn shift(buf: &mut [u8]) {
@@ -81,17 +91,17 @@ fn main() -> Result<()> {
 
             // spawn a background thread to deal with the input
             
-            let _join_handler = thread::spawn(move || {
-                // loop over events on the term input,(_eventkey, bytevec)
-                // forward keys to child process
-                for event in stdin.events_and_raw() {
-                    if let Ok((_event, byte_vector)) = event {
-                        pty_writer.write(&byte_vector);
-                        pty_writer.flush();                        
-                    }
-                    //thread::sleep(Duration::from_millis(50));
-                }
-            });
+            //let _join_handler = thread::spawn(move || {
+            //    // loop over events on the term input,(_eventkey, bytevec)
+            //    // forward keys to child process
+            //    for event in stdin.events_and_raw() {
+            //        if let Ok((_event, byte_vector)) = event {
+            //            pty_writer.write(&byte_vector);
+            //            pty_writer.flush();                        
+            //        }
+            //        //thread::sleep(Duration::from_millis(50));
+            //    }
+            //});
 
             // would like to abstract this raw_read stuff a bit,
             // and just have a bytes iterator coming in, and being
@@ -107,10 +117,20 @@ fn main() -> Result<()> {
                 stdout.flush();
                 match String::from_utf8(buf[buf.len() - 6 ..].to_vec()).unwrap().as_str() {
                     "\x1b[?25h" => {
-                        inspect_grid(&terminal, &mut stderr);
                         let (north, south, east, west) = get_box(&terminal);
-                        stderr.write(format!("box distances: N {}, S {}, E {}, W {}", north, south, east, west).as_bytes());
-                        stderr.flush();
+                        stderr.write(format!("boundaries: n {}, e {}, s {}, w {}\n", north, east, south, west).as_bytes());
+                        if let Some((dy, dx)) = get_wand_vector(&terminal) {
+                            if dy < north && dy > south && dx < west && dx > east {
+                                stderr.write(format!("wand at location: {}, {}\n", dy, dx).as_bytes());
+                                stderr.flush();
+                            } else {
+                                pty_writer.write("<y   ".as_bytes());
+                                pty_writer.flush();
+                            }
+                        } else {
+                            pty_writer.write("<y   ".as_bytes());
+                            pty_writer.flush();
+                        }
                     },
                     _ => ()
                 }
