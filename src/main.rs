@@ -14,25 +14,18 @@
 
 // it also isn't possible to have something like cat /dev/pts/n >/dev/pts/m
 // running in the background - 
-
-extern crate nix;
-extern crate termion;
-extern crate terminal_emulator;
+#![feature(iter_intersperse)]
 mod term;
 use crate::term::{fork_terminal, TermFork};
 use std::error;
 use std::i32::MAX;
 use std::f64::MAX as MAX_FLOAT;
-use std::io::{stdin, stdout, stderr, Write, Stderr};
+use std::io::{stdout, stderr, Write};
 use std::process::Command;
-use std::thread;
-use nix::dir::Dir;
-//use std::time::Duration;
 use terminal_emulator::ansi::Processor;
 use terminal_emulator::term::Term;
-use termion::cursor;
 use termion::raw::IntoRawMode;
-use termion::input::TermReadEventsAndRaw;
+use regex::Regex;
 
 type Result<T> = std::result::Result<T, Box<dyn error::Error>>;
 
@@ -54,7 +47,7 @@ fn get_box(term: &Term) -> (i32, i32, i32, i32) {
 }
 
 fn calculate_distance(disty: i32, distx: i32) -> f64 {
-    f64::from(disty).abs() / ((f64::from(disty).abs() / f64::from(distx).abs()).atan().sin())
+    (f64::from(disty).powf(2.0) + f64::from(distx).powf(2.0)).sqrt()
 }
 
 fn get_direction(disty: i32, distx: i32) -> char {
@@ -101,75 +94,145 @@ fn shift(buf: &mut [u8]) {
     }
 }
 
+enum Item {
+    Wand(String),
+    Strange(String)
+}
+
+enum LookFeet {
+    Nothing,
+    Stairs,
+    Loot(Item)
+}
+
+fn parse_look_message(buf: &[u8]) -> Option<LookFeet> {
+    buf.rsplitn(10, |c| *c == b'\x1b')
+        .find(|s| s.len() >= 5 && &s[0..5] == "[0;1m".as_bytes())
+        .map_or(None, |s| {
+        let no_objects_re = Regex::new(
+            r"You see no objects here\."
+        ).unwrap();
+        let bytes_vector = s.to_vec();
+        let string = String::from_utf8(bytes_vector).unwrap();
+        
+        let mut stderr = stderr().into_raw_mode().unwrap();
+        stderr.write(format!("{}\n", &string).as_bytes());
+        if no_objects_re.is_match(&string) {
+            return Some(LookFeet::Nothing);
+        }
+        let re = Regex::new(
+            r"(?x)
+            (You\ssee\shere|There\sis)\s
+            (an?|\d+)\s
+            (?:(blessed|cursed|uncursed|holy|unholy)\s)?
+            (?:([[:^space:]]+)\s)*
+            (?:(of)\s)?
+            ([[:^space:]]+)
+            (?:\s(named|called)
+                \s([[:^space:]]+))?
+            (?:\s\(
+                (?P<C>\d+)
+                : (?P<c>\d+)
+            \))?\."
+        ).unwrap();
+        for cap in re.captures_iter(&string) {
+            stderr.write(format!("{}, {}, {}", &cap[0].to_string(), &cap[1].to_string(), &cap[2].to_string()).as_bytes());
+            if cap[0].eq("There is a staircase up here.") {
+                return Some(LookFeet::Stairs);
+            }
+            if cap[1].eq("You see here") {
+                for i in 0 .. cap.len() {
+                    if cap[i].eq("wand") && i + 2 < cap.len() && cap[i+1].eq("of") {
+                        return Some(LookFeet::Loot(Item::Wand(cap[i+2].to_string())));
+                    } else if cap[i].eq("wand") {
+                        return Some(LookFeet::Loot(Item::Wand(cap[i-1].to_string())));
+                    }
+                }
+                return Some(LookFeet::Loot(Item::Strange(cap.iter().skip(2).map(|c|c.unwrap().as_str()).intersperse(" ").collect::<String>())));
+            }
+        }
+        None
+    })
+}
+
 fn main() -> Result<()> {
 
     match fork_terminal()? {
         TermFork::Parent(pty_reader, mut pty_writer, mut terminal) => {
             let mut stdout = stdout().into_raw_mode().unwrap();
             let mut stderr = stderr().into_raw_mode().unwrap();
-            let stdin = stdin();
             let mut processor = Processor::new();
 
-            // spawn a background thread to deal with the input
-            
-            //let _join_handler = thread::spawn(move || {
-            //    // loop over events on the term input,(_eventkey, bytevec)
-            //    // forward keys to child process
-            //    for event in stdin.events_and_raw() {
-            //        if let Ok((_event, byte_vector)) = event {
-            //            pty_writer.write(&byte_vector);
-            //            pty_writer.flush();                        
-            //        }
-            //        //thread::sleep(Duration::from_millis(50));
-            //    }
-            //});
+            let mut read_buf: [u8; 4096] = [ 0; 4096 ];
+            let mut unicode_buf: [u8; 6] = [ 0; 6 ];
+            let mut have_looked = false;
+            let mut stairs = false;
 
-            // would like to abstract this raw_read stuff a bit,
-            // and just have a bytes iterator coming in, and being
-            // passed to processor.advance()
-            let mut buf: [u8; 4096] = [ 0; 4096 ];
             for c in pty_reader {
-                // do stuff with received byte
                 processor.advance(&mut terminal, c, &mut stdout);
-                buf[buf.len() - 1] = c;
-                //stderr.write(&buf);
-                //stderr.flush();
-                stdout.write(&buf[buf.len() - 1..]);
-                stdout.flush();
-                match String::from_utf8(buf[buf.len() - 6 ..].to_vec()).unwrap().as_str() {
+                read_buf[read_buf.len() - 1] = c;
+                stdout.write(&read_buf[read_buf.len() - 1..])?;
+                stdout.flush()?;
+                match String::from_utf8(read_buf[read_buf.len() - 6 ..].to_vec()).unwrap().as_str() {
                     "\x1b[?25h" => {
                         let (north, south, east, west) = get_box(&terminal);
-                        stderr.write(format!("boundaries: n {}, e {}, s {}, w {}\n", north, east, south, west).as_bytes());
-                        if let Some((dy, dx)) = get_wand_vector(&terminal) {
-                            if dy < north && dy > south && dx < west && dx > east {
-                                stderr.write(format!("wand at location: {}, {}\n", dy, dx).as_bytes());
-                                stderr.flush();
-                                let mut unicode_buf: [u8; 6] = [ 0; 6 ];
-                                pty_writer.write(get_direction(dy, dx).encode_utf8(&mut unicode_buf).as_bytes());
+                        let at_feet = parse_look_message(&read_buf[read_buf.len() - 512 ..]);
+                        if let Some(feature) = at_feet {
+                            match feature {
+                                LookFeet::Loot(item) => {
+                                    match item {
+                                        Item::Wand(s) => {
+                                            pty_writer.write(",".as_bytes())?;
+                                            stderr.write(format!("picked up a {} wand!\n", s).as_bytes())?;
+                                            stderr.flush()?;
+                                        },
+                                        Item::Strange(s) => {
+                                            stderr.write(format!("found strange {} on ground!\n", s).as_bytes())?;
+                                            stderr.flush()?;
+                                        }
+                                    }
+                                },
+                                LookFeet::Stairs => stairs = true,
+                                LookFeet::Nothing => stairs = false
+                            }
+                            have_looked = true;
+                        }
+                        if have_looked {
+                            stderr.flush()?;
+                            if let Some((dy, dx)) = get_wand_vector(&terminal) {
+                                if dy < north && dy > south && dx < west && dx > east {
+                                    stderr.write(format!("wand at location: {}, {}\n", dy, dx).as_bytes())?;
+                                    stderr.flush()?;
+                                    pty_writer.write(get_direction(dy, dx).encode_utf8(&mut unicode_buf).as_bytes())?;
+                                    have_looked = false;
+                                } else {
+                                    if stairs {
+                                        pty_writer.write("<y   ".as_bytes())?;
+                                    } else {
+                                        pty_writer.write("# quit\ny   ".as_bytes())?;
+                                    }
+                                }
                             } else {
-                                pty_writer.write("<y   ".as_bytes());
-                                pty_writer.flush();
+                                if stairs {
+                                    pty_writer.write("<y   ".as_bytes())?;
+                                } else {
+                                    pty_writer.write("# quit\ny   ".as_bytes())?;
+                                }
                             }
                         } else {
-                            pty_writer.write("<y   ".as_bytes());
-                            pty_writer.flush();
+                            pty_writer.write(':'.encode_utf8(&mut unicode_buf).as_bytes())?;
                         }
                     },
                     _ => ()
                 }
-                shift(&mut buf);
-                //thread::sleep(Duration::from_millis(50));
+                pty_writer.flush()?;
+                shift(&mut read_buf);
             }
 
             Ok(())
         },
         TermFork::Child => {
-            // Child process just exec `tty`
-            //Command::new("tty").status().expect("could not execute tty");
-            //Command::new("stty").arg("-a").status().expect("could not execute stty -a");
             Command::new("nethack").status().expect("could not execute local nethack");
-            //Command::new("ssh").arg("hdf").status().expect("could not execute local nethack");
-            //Command::new("sh").status().expect("could not execute shell");
             Ok(())
         }
     }
