@@ -21,21 +21,40 @@ extern crate terminal_emulator;
 mod term;
 use crate::term::{fork_terminal, TermFork};
 use std::error;
-use std::io::{stdin, stdout, Write};
+use std::io::{stdin, stdout, stderr, Write};
 use std::process::Command;
 use std::thread;
 //use std::time::Duration;
 use terminal_emulator::ansi::Processor;
+use terminal_emulator::term::Term;
 use termion::raw::IntoRawMode;
 use termion::input::TermReadEventsAndRaw;
 
 type Result<T> = std::result::Result<T, Box<dyn error::Error>>;
+
+fn inspect_grid(term: &Term) -> Option<(i64, i64)> {
+    let (cursor_posy, cursor_posx) = (*term.cursor().point.line as i64, *term.cursor().point.col as i64);
+    let grid = term.grid();
+    for cell in grid.display_iter() {
+        if cell.c == '/' {
+            return Some((cursor_posy - *cell.line as i64, cursor_posx - *cell.column as i64));
+        }
+    }
+    None
+}
+
+fn shift(buf: &mut [u8]) {
+    for i in 1 .. buf.len() {
+        buf[i-1] = buf[i]
+    }
+}
 
 fn main() -> Result<()> {
 
     match fork_terminal()? {
         TermFork::Parent(pty_reader, mut pty_writer, mut terminal) => {
             let mut stdout = stdout().into_raw_mode().unwrap();
+            let mut stderr = stderr().into_raw_mode().unwrap();
             let stdin = stdin();
             let mut processor = Processor::new();
 
@@ -56,9 +75,25 @@ fn main() -> Result<()> {
             // would like to abstract this raw_read stuff a bit,
             // and just have a bytes iterator coming in, and being
             // passed to processor.advance()
+            let mut buf: [u8; 4096] = [ 0; 4096 ];
             for c in pty_reader {
                 // do stuff with received byte
                 processor.advance(&mut terminal, c, &mut stdout);
+                buf[buf.len() - 1] = c;
+                //stderr.write(&buf);
+                //stderr.flush();
+                stdout.write(&buf[buf.len() - 1..]);
+                stdout.flush();
+                match String::from_utf8(buf[buf.len() - 6 ..].to_vec()).unwrap().as_str() {
+                    "\x1b[?25h" => {
+                        if let Some((disty, distx)) = inspect_grid(&terminal) {
+                            stderr.write(format!("got / at distance of {}, {}\n", disty, distx).as_bytes());
+                            stderr.flush();
+                        }
+                    },
+                    _ => ()
+                }
+                shift(&mut buf);
                 //thread::sleep(Duration::from_millis(50));
             }
 
@@ -66,9 +101,9 @@ fn main() -> Result<()> {
         },
         TermFork::Child => {
             // Child process just exec `tty`
-            Command::new("tty").status().expect("could not execute tty");
+            //Command::new("tty").status().expect("could not execute tty");
             //Command::new("stty").arg("-a").status().expect("could not execute stty -a");
-            //Command::new("nethack").status().expect("could not execute local nethack");
+            Command::new("nethack").status().expect("could not execute local nethack");
             //Command::new("ssh").arg("hdf").status().expect("could not execute local nethack");
             //Command::new("sh").status().expect("could not execute shell");
             Ok(())
