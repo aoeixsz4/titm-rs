@@ -26,6 +26,7 @@ use std::f64::MAX as MAX_FLOAT;
 use std::io::{stdin, stdout, stderr, Write, Stderr};
 use std::process::Command;
 use std::thread;
+use nix::dir::Dir;
 //use std::time::Duration;
 use terminal_emulator::ansi::Processor;
 use terminal_emulator::term::Term;
@@ -54,6 +55,26 @@ fn get_box(term: &Term) -> (i32, i32, i32, i32) {
 
 fn calculate_distance(disty: i32, distx: i32) -> f64 {
     f64::from(disty).abs() / ((f64::from(disty).abs() / f64::from(distx).abs()).atan().sin())
+}
+
+fn get_direction(disty: i32, distx: i32) -> char {
+    if disty > 0 && distx > 0 {
+        'y'
+    } else if disty > 0 && distx == 0 {
+        'k'
+    } else if disty > 0 && distx < 0 {
+        'u'
+    } else if disty == 0 && distx < 0 {
+        'l'
+    } else if disty < 0 && distx < 0 {
+        'n'
+    } else if disty < 0 && distx == 0 {
+        'j'
+    } else if disty < 0 && distx > 0 {
+        'b'
+    } else {
+        'h'
+    }
 }
 
 fn get_wand_vector(term: &Term) -> Option<(i32, i32)> {
@@ -123,6 +144,8 @@ fn main() -> Result<()> {
                             if dy < north && dy > south && dx < west && dx > east {
                                 stderr.write(format!("wand at location: {}, {}\n", dy, dx).as_bytes());
                                 stderr.flush();
+                                let mut unicode_buf: [u8; 6] = [ 0; 6 ];
+                                pty_writer.write(get_direction(dy, dx).encode_utf8(&mut unicode_buf).as_bytes());
                             } else {
                                 pty_writer.write("<y   ".as_bytes());
                                 pty_writer.flush();
