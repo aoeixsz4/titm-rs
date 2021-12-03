@@ -21,7 +21,8 @@ extern crate terminal_emulator;
 mod term;
 use crate::term::{fork_terminal, TermFork};
 use std::error;
-use std::io::{stdin, stdout, stderr, Write};
+use std::i64::MAX;
+use std::io::{stdin, stdout, stderr, Write, Stderr};
 use std::process::Command;
 use std::thread;
 //use std::time::Duration;
@@ -32,12 +33,32 @@ use termion::input::TermReadEventsAndRaw;
 
 type Result<T> = std::result::Result<T, Box<dyn error::Error>>;
 
-fn inspect_grid(term: &Term) -> Option<(i64, i64)> {
+fn get_box(term: &Term) -> (i64, i64, i64, i64) {
+    let (cursor_posy, cursor_posx) = (*term.cursor().point.line as i64, *term.cursor().point.col as i64);
+    let (mut north, mut east, mut south, mut west) = (MAX, -MAX, -MAX, MAX);
+    let grid = term.grid();
+    for cell in grid.display_iter() {
+        let (disty, distx) = (cursor_posy - *cell.line as i64, cursor_posx - *cell.column as i64);
+        match cell.c {
+            '─' if disty > 0 && disty < north => north = disty,
+            '─' if disty < 0 && disty > south => south = disty,
+            '│' if distx < 0 && distx > east => east = distx,
+            '│' if distx > 0 && distx < west  => west = distx,
+            _ => ()
+        }
+    }
+    (north, south, east, west)
+}
+
+fn inspect_grid(term: &Term, stderr: &mut Stderr) -> Option<(i64, i64)> {
     let (cursor_posy, cursor_posx) = (*term.cursor().point.line as i64, *term.cursor().point.col as i64);
     let grid = term.grid();
     for cell in grid.display_iter() {
-        if cell.c == '/' {
-            return Some((cursor_posy - *cell.line as i64, cursor_posx - *cell.column as i64));
+        let mut buf = [0; 8];
+        stderr.write(cell.c.encode_utf8(&mut buf).as_bytes());
+        if *cell.column == 0 {
+            buf[0] = '\n' as u8;
+            stderr.write(&buf[..1]);
         }
     }
     None
@@ -86,10 +107,10 @@ fn main() -> Result<()> {
                 stdout.flush();
                 match String::from_utf8(buf[buf.len() - 6 ..].to_vec()).unwrap().as_str() {
                     "\x1b[?25h" => {
-                        if let Some((disty, distx)) = inspect_grid(&terminal) {
-                            stderr.write(format!("got / at distance of {}, {}\n", disty, distx).as_bytes());
-                            stderr.flush();
-                        }
+                        inspect_grid(&terminal, &mut stderr);
+                        let (north, south, east, west) = get_box(&terminal);
+                        stderr.write(format!("box distances: N {}, S {}, E {}, W {}", north, south, east, west).as_bytes());
+                        stderr.flush();
                     },
                     _ => ()
                 }

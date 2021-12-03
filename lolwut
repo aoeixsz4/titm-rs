@@ -1,0 +1,137 @@
+   Compiling titm v0.1.0 (/Users/jdoyle/git/titm-rs)
+warning: unused variable: `cursor_posy`
+  --> src/main.rs:54:10
+   |
+54 |     let (cursor_posy, cursor_posx) = (*term.cursor().point.line as i64, *term.cursor().point.col as i64);
+   |          ^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_cursor_posy`
+   |
+   = note: `#[warn(unused_variables)]` on by default
+
+warning: unused variable: `cursor_posx`
+  --> src/main.rs:54:23
+   |
+54 |     let (cursor_posy, cursor_posx) = (*term.cursor().point.line as i64, *term.cursor().point.col as i64);
+   |                       ^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_cursor_posx`
+
+warning: unused `std::result::Result` that must be used
+  --> src/main.rs:58:9
+   |
+58 |         stderr.write(cell.c.encode_utf8(&mut buf).as_bytes());
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_must_use)]` on by default
+   = note: this `Result` may be an `Err` variant, which should be handled
+
+warning: unused `std::result::Result` that must be used
+  --> src/main.rs:61:13
+   |
+61 |             stderr.write(&buf[..1]);
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this `Result` may be an `Err` variant, which should be handled
+
+warning: unused `std::result::Result` that must be used
+  --> src/main.rs:89:25
+   |
+89 |                         pty_writer.write(&byte_vector);
+   |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this `Result` may be an `Err` variant, which should be handled
+
+warning: unused `std::result::Result` that must be used
+  --> src/main.rs:90:25
+   |
+90 |                         pty_writer.flush();                        
+   |                         ^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this `Result` may be an `Err` variant, which should be handled
+
+warning: unused `std::result::Result` that must be used
+   --> src/main.rs:106:17
+    |
+106 |                 stdout.write(&buf[buf.len() - 1..]);
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: this `Result` may be an `Err` variant, which should be handled
+
+warning: unused `std::result::Result` that must be used
+   --> src/main.rs:107:17
+    |
+107 |                 stdout.flush();
+    |                 ^^^^^^^^^^^^^^^
+    |
+    = note: this `Result` may be an `Err` variant, which should be handled
+
+warning: unused `std::result::Result` that must be used
+   --> src/main.rs:112:25
+    |
+112 |                         stderr.write(format!("box distances: N {}, S {}, E {}, W {}", north, south, east, west).as_bytes());
+    |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: this `Result` may be an `Err` variant, which should be handled
+
+warning: unused `std::result::Result` that must be used
+   --> src/main.rs:113:25
+    |
+113 |                         stderr.flush();
+    |                         ^^^^^^^^^^^^^^^
+    |
+    = note: this `Result` may be an `Err` variant, which should be handled
+
+warning: `titm` (bin "titm") generated 10 warnings
+    Finished dev [unoptimized + debuginfo] target(s) in 0.49s
+     Running `target/debug/titm`
+ 
+                                                                                 ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐ 
+Hello jdoyle, welcome to NetHack!  You are a chaotic female elven Wizard.        │Weapons                                                                                                                                                                                     │ 
+Be careful!  New moon tonight.                                                   │a) blessed +1 quarterstaff (weapon in hands)                                                                                                                                                │ 
+                                                                                 │Armor                                                                                                                                                                                       │ 
+                                                                                 │b) uncursed +0 cloak of magic resistance (being worn)                                                                                                                                       │ 
+                                                                                 │Scrolls                                                                                                                                                                                     │ 
+                                                                                 │h) uncursed scroll of magic mapping                                                                                                                                                         │ 
+                                                                                 │i) uncursed scroll of enchant weapon                                                                                                                                                        │ 
+                                                                                 │j) uncursed scroll of identify                                                                                                                                                              │ 
+                                                                                 │Spellbooks                                                                                                                                                                                  │ 
+                                                                                 │k) blessed spellbook of force bolt                                                                                                                                                          │ 
+                                                                                 │l) uncursed spellbook of confuse monster                                                                                                                                                    │ 
+                                                                                 │Potions                                                                                                                                                                                     │ 
+                                                                                 │f) uncursed potion of restore ability                                                                                                                                                       │ 
+                                                                                 │g) 2 uncursed potions of paralysis                                                                                                                                                          │ 
+                                                                                 │Rings                                                                                                                                                                                       │ 
+                                                                                 │d) uncursed ring of stealth                                                                                                                                                                 │ 
+                                                                                 │e) uncursed ring of free action                                                                                                                                                             │ 
+                                                                                 │Wands                                                                                                                                                                                       │ 
+                                                                                 │c) uncursed wand of light (0:15)                                                                                                                                                            │ 
+                                                                                 │Tools                                                                                                                                                                                       │ 
+                                                                                 │m) uncursed bell                                                                                                                                                                            │ 
+                                                                                 │                                                                                                                                                                                            │ 
+                                                                                 │                                                                                                                                                                                            │ 
+                                                                                 │                                                                                                                                                                                            │┌
+────────────────────────────────────────────────────────────────────────────────┐│                                                                                                                                                                                            ││
+                                                                                ││                                                                                                                                                                                            ││
+                                                                                ││                                                                                                                                                                                            ││
+                                                                                ││                                                                                                                                                                                            ││
+                                                       ┌───────┐                ││                                                                                                                                                                                            ││
+                                                       │·······+                ││                                                                                                                                                                                            ││
+                                                       │·······│                ││                                                                                                                                                                                            ││
+                                                       +·······│                ││                                                                                                                                                                                            ││
+                                                       │····@··│                ││                                                                                                                                                                                            ││
+                                                       └ ──────┘                ││                                                                                                                                                                                            ││
+                                                                                ││                                                                                                                                                                                            ││
+                                                                                ││                                                                                                                                                                                            ││
+                                                                                ││                                                                                                                                                                                            ││
+                                                                                ││                                                                                                                                                                                            ││
+                                                                                ││                                                                                                                                                                                            ││
+                                                                                ││                                                                                                                                                                                            ││
+                                                                                ││                                                                                                                                                                                            ││
+                                                                                ││                                                                                                                                                                                            ││
+                                                                                ││                                                                                                                                                                                            ││
+                                                                                ││                                                                                                                                                                                            ││
+                                                                                ││                                                                                                                                                                                            ││
+                                                                                ││                                                                                                                                                                                            │└
+────────────────────────────────────────────────────────────────────────────────┘│                                                                                                                                                                                            │┌
+────────────────────────────────────────────────────────────────────────────────┐│                                                                                                                                                                                            ││
+[Jdoyle the Evoker             ]  St:7 Dx:15 Co:14 In:18 Wi:10 Ch:11            ││                                                                                                                                                                                            ││
+Chaotic  $:0  HP:11(11)  Pw:8(8)  AC:9  Xp:1/0                                  ││                                                                                                                                                                                            ││
+Dlvl:1  T:1                                                                     ││                                                                                                                                                                                            │└
+────────────────────────────────────────────────────────────────────────────────┘└────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘box distances: N 4, S -1, E -3, W 5
