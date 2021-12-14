@@ -4,7 +4,7 @@ use std::error;
 use std::str;
 use std::i32::MAX;
 use std::f64::MAX as MAX_FLOAT;
-use std::io::{stdout, stderr, Write};
+use std::io::{stdout, Write};
 use std::process::Command;
 use regex::CaptureLocations;
 use terminal_emulator::ansi::Processor;
@@ -35,10 +35,10 @@ fn calculate_distance(disty: i32, distx: i32) -> f64 {
     (f64::from(disty).powf(2.0) + f64::from(distx).powf(2.0)).sqrt()
 }
 
-const DIRECTION_GRID: [[char; 3]; 3] = [['y','k','u'],['h','.','l'],['b','j','n']];
+const DIRECTION_GRID: [[&'static str; 3]; 3] = [["y","k","u"],["h",".","l"],["b","j","n"]];
 
-fn get_direction_key(unit_vec: (i8, i8)) -> char {
-    let (x, y) = ((unit_vec.0 + 1), (unit_vec.1 + 1));
+fn get_direction_key(dx: i32, dy: i32) -> &'static str {
+    let (x, y) = ((dx/dx.abs())+1, (dy/dy.abs())+1);
     DIRECTION_GRID[y as usize][x as usize]
 }
 
@@ -99,8 +99,6 @@ fn parse_look_message<'a> (buf: &'a [u8]) -> Option<LookFeet<'a>> {
         ).unwrap();
         let s = str::from_utf8(bytes).unwrap();
         
-        let mut stderr = stderr().into_raw_mode().unwrap();
-        stderr.write(format!("{}\n", s).as_bytes()).unwrap_or_else(|_e| 0);
         if no_objects_re.is_match(s) {
             return Some(LookFeet::Nothing);
         }
@@ -143,16 +141,52 @@ fn parse_look_message<'a> (buf: &'a [u8]) -> Option<LookFeet<'a>> {
     None
 }
 
+fn quit_string(stairs: bool) -> &'static str {
+    if stairs { "<y   " } else { "# quit\ny   " }
+}
+
+fn respond(term: &Term, read_buf: &[u8], have_picked: &mut bool, have_looked: &mut bool, stairs: &mut bool) -> Option<&'static str> {
+    let (north, south, east, west) = get_box(term);
+    if let Some(feature) = parse_look_message(&read_buf[read_buf.len() - 512 ..]) {
+        match feature {
+            LookFeet::Loot(item) => {
+                match item {
+                    Item::Wand(_) => { *have_picked = true; return Some(","); },
+                    Item::Strange(_) => ()
+                }
+            },
+            LookFeet::UpStairs => *stairs = true,
+            LookFeet::DownStairs => *stairs = false,
+            LookFeet::Nothing => *stairs = false
+        }
+        *have_looked = true;
+    }
+    if *have_looked {
+        if let Some((dy, dx)) = get_wand_vector(term) {
+            if dy < north && dy > south && dx < west && dx > east {
+                *have_looked = false;
+                Some(get_direction_key(dx, dy))
+            } else {
+                Some(quit_string(*stairs))
+            }
+        } else {
+            Some(quit_string(*stairs))
+        }
+    } else {
+        Some(":")
+    }
+}
+
+const SHOW_CURSOR_SEQUENCE: &'static str = "\x1b[?25h";
+
 fn main() -> Result<()> {
     match fork_terminal()? {
         TermFork::Parent(pty_reader, mut pty_writer, mut terminal) => {
             let mut stdout = stdout().into_raw_mode().unwrap();
-            let mut stderr = stderr().into_raw_mode().unwrap();
             let mut processor = Processor::new();
-
-            let mut read_buf: [u8; 4096] = [ 0; 4096 ];
-            let mut unicode_buf: [u8; 6] = [ 0; 6 ];
+            let mut read_buf= [0u8; 4096];
             let mut have_looked = false;
+            let mut have_picked = true;
             let mut stairs = false;
 
             for c in pty_reader {
@@ -160,59 +194,10 @@ fn main() -> Result<()> {
                 read_buf[read_buf.len() - 1] = c;
                 stdout.write(&read_buf[read_buf.len() - 1..])?;
                 stdout.flush()?;
-                match str::from_utf8(&read_buf[read_buf.len() - 6 ..]).unwrap() {
-                    "\x1b[?25h" => {
-                        let (north, south, east, west) = get_box(&terminal);
-                        let at_feet = parse_look_message(&read_buf[read_buf.len() - 512 ..]);
-                        if let Some(feature) = at_feet {
-                            match feature {
-                                LookFeet::Loot(item) => {
-                                    match item {
-                                        Item::Wand(s) => {
-                                            pty_writer.write(",".as_bytes())?;
-                                            stderr.write(format!("picked up a {} wand!\n", s).as_bytes())?;
-                                            stderr.flush()?;
-                                        },
-                                        Item::Strange(s) => {
-                                            stderr.write(format!("found strange {} on ground!\n", s).as_bytes())?;
-                                            stderr.flush()?;
-                                        }
-                                    }
-                                },
-                                LookFeet::UpStairs => stairs = true,
-                                LookFeet::DownStairs => stairs = false,
-                                LookFeet::Nothing => stairs = false
-                            }
-                            have_looked = true;
-                        }
-                        if have_looked {
-                            stderr.flush()?;
-                            if let Some((dy, dx)) = get_wand_vector(&terminal) {
-                                if dy < north && dy > south && dx < west && dx > east {
-                                    stderr.write(format!("wand at location: {}, {}\n", dy, dx).as_bytes())?;
-                                    stderr.flush()?;
-                                    let unit_vec = ((dx/dx.abs()) as i8, (dy/dy.abs()) as i8);
-                                    pty_writer.write(get_direction_key(unit_vec).encode_utf8(&mut unicode_buf).as_bytes())?;
-                                    have_looked = false;
-                                } else {
-                                    if stairs {
-                                        pty_writer.write("<y   ".as_bytes())?;
-                                    } else {
-                                        pty_writer.write("# quit\ny   ".as_bytes())?;
-                                    }
-                                }
-                            } else {
-                                if stairs {
-                                    pty_writer.write("<y   ".as_bytes())?;
-                                } else {
-                                    pty_writer.write("# quit\ny   ".as_bytes())?;
-                                }
-                            }
-                        } else {
-                            pty_writer.write(':'.encode_utf8(&mut unicode_buf).as_bytes())?;
-                        }
-                    },
-                    _ => ()
+                if str::from_utf8(&read_buf[read_buf.len() - 6 ..]).unwrap() == SHOW_CURSOR_SEQUENCE {
+                    if let Some(out) = respond(&terminal, &read_buf, &mut have_picked, &mut have_looked, &mut stairs) {
+                        pty_writer.write(out.as_bytes())?;
+                    }
                 }
                 pty_writer.flush()?;
                 shift(&mut read_buf);
