@@ -1,76 +1,211 @@
-// new approach
-// we can use script -f in order to duplicate a session
-// i.e. say user is rxvt-unicode at /dev/pts/4, and we
-// have created a /dev/pts/5 that we own and control
-// we run script -f /dev/pts/5 on the shell running on
-// /dev/pts/4, and then run script -f /dev/pts/4 on our own
-// (or possibly do what script would do, directly - i think
-// it is essentially routing everything pts/4 to pts/5 and
-// vice-versa)
-
-// actually script is not designed in such a way that is ideal for our purposes
-// instead, we should create our own pts in which to run ssh/nethack,
-// while relaying I/O streams to the pts/tty within which we were called
-
-// it also isn't possible to have something like cat /dev/pts/n >/dev/pts/m
-// running in the background - 
-
-extern crate nix;
-extern crate termion;
-extern crate terminal_emulator;
 mod term;
 use crate::term::{fork_terminal, TermFork};
 use std::error;
-use std::io::{stdin, stdout, Write};
+use std::str;
+use std::i32::MAX;
+use std::f64::MAX as MAX_FLOAT;
+use std::io::{stdout, Write};
 use std::process::Command;
-use std::thread;
-//use std::time::Duration;
+use regex::CaptureLocations;
 use terminal_emulator::ansi::Processor;
+use terminal_emulator::term::Term;
 use termion::raw::IntoRawMode;
-use termion::input::TermReadEventsAndRaw;
+use regex::Regex;
 
 type Result<T> = std::result::Result<T, Box<dyn error::Error>>;
 
-fn main() -> Result<()> {
+fn get_box(term: &Term) -> (i32, i32, i32, i32) {
+    let (cursor_posy, cursor_posx) = (*term.cursor().point.line as i32, *term.cursor().point.col as i32);
+    let (mut north, mut east, mut south, mut west) = (MAX, -MAX, -MAX, MAX);
+    let grid = term.grid();
+    for cell in grid.display_iter() {
+        let (disty, distx) = (cursor_posy - *cell.line as i32, cursor_posx - *cell.column as i32);
+        match cell.c {
+            '─' if disty > 0 && disty < north => north = disty,
+            '─' if disty < 0 && disty > south => south = disty,
+            '│' if distx < 0 && distx > east => east = distx,
+            '│' if distx > 0 && distx < west  => west = distx,
+            _ => ()
+        }
+    }
+    (north, south, east, west)
+}
 
+fn calculate_distance(disty: i32, distx: i32) -> f64 {
+    (f64::from(disty).powf(2.0) + f64::from(distx).powf(2.0)).sqrt()
+}
+
+const DIRECTION_GRID: [[&'static str; 3]; 3] = [["y","k","u"],["h",".","l"],["b","j","n"]];
+
+fn get_direction_key(dx: i32, dy: i32) -> &'static str {
+    let (x, y) = ((dx/dx.abs())+1, (dy/dy.abs())+1);
+    DIRECTION_GRID[y as usize][x as usize]
+}
+
+fn get_wand_vector(term: &Term) -> Option<(i32, i32)> {
+    let (cursor_posy, cursor_posx) = (*term.cursor().point.line as i32, *term.cursor().point.col as i32);
+    let mut distance = MAX_FLOAT;
+    let mut result = None;
+    let grid = term.grid();
+    for cell in grid.display_iter() {
+        if cell.c == '/' {
+            let (dy, dx) = (cursor_posy - *cell.line as i32, cursor_posx - *cell.column as i32);
+            let d = calculate_distance(dy,dx);
+            if d < distance {
+                distance = d;
+                result = Some((dy, dx));
+            }
+        }
+    }
+    result
+}
+
+fn shift(buf: &mut [u8]) {
+    for i in 1 .. buf.len() {
+        buf[i-1] = buf[i]
+    }
+}
+
+enum Item<'a> {
+    Wand(&'a str),
+    Strange(&'a str)
+}
+
+enum LookFeet<'a> {
+    Nothing,
+    UpStairs,
+    DownStairs,
+    Loot(Item<'a>)
+}
+
+fn get_token<'a> (locs: &CaptureLocations, s: &'a str, i: usize) -> &'a str {
+    let (b, l) = locs.get(i).unwrap();
+    &s[b..l]
+}
+
+fn get_token_opt<'a> (locs: &CaptureLocations, s: &'a str, i: usize) -> Option<&'a str> {
+    if let Some((b, l)) = locs.get(i) {
+        Some(&s[b..l])
+    } else {
+        None
+    } 
+}
+
+fn parse_look_message<'a> (buf: &'a [u8]) -> Option<LookFeet<'a>> {
+    for bytes in buf.rsplitn(10, |c| *c == b'\x1b')
+        .find(|s| s.len() >= 5 && &s[0..5] == "[0;1m".as_bytes()) {
+        let no_objects_re = Regex::new(
+            r"You see no objects here\."
+        ).unwrap();
+        let s = str::from_utf8(bytes).unwrap();
+        
+        if no_objects_re.is_match(s) {
+            return Some(LookFeet::Nothing);
+        }
+        let re = Regex::new(
+            r"(?x)
+            (You\ssee\shere|There\sis)\s
+            (an?|\d+)\s
+            (?:(blessed|cursed|uncursed|holy|unholy)\s)?
+            (?:([[:^space:]]+)\s)*
+            (?:(of)\s)?
+            ([[:^space:]]+)
+            (?:\s(named|called)
+                \s([[:^space:]]+))?
+            (?:\s\(
+                (?P<C>\d+)
+                : (?P<c>\d+)
+            \))?\."
+        ).unwrap();
+        let mut locs = re.capture_locations();
+        let first_match = re.captures_read(&mut locs, s);
+        if first_match.is_none() { return None; }
+        if get_token(&locs, s, 0) == "There is a staircase up here." {
+            return Some(LookFeet::UpStairs);
+        }
+        if get_token(&locs, s, 0) == "There is a staircase down here." {
+            return Some(LookFeet::DownStairs);
+        }
+        if get_token(&locs, s, 1) == "You see here" {
+            let (item_type, item_description) = if let Some(_) = locs.get(5) {
+                (get_token(&locs, s, 4), get_token_opt(&locs, s, 6).unwrap_or(""))
+            } else {
+                (get_token(&locs, s, 6), get_token_opt(&locs, s, 4).unwrap_or(""))
+            };
+            if item_type == "wand" {
+                return Some(LookFeet::Loot(Item::Wand(item_description)));
+            }
+            return Some(LookFeet::Loot(Item::Strange(&s[13..])));
+        }
+    }
+    None
+}
+
+fn quit_string(stairs: bool) -> &'static str {
+    if stairs { "<y   " } else { "# quit\ny   " }
+}
+
+fn respond(term: &Term, read_buf: &[u8], have_picked: &mut bool, have_looked: &mut bool, stairs: &mut bool) -> Option<&'static str> {
+    let (north, south, east, west) = get_box(term);
+    if let Some(feature) = parse_look_message(&read_buf[read_buf.len() - 512 ..]) {
+        match feature {
+            LookFeet::Loot(item) => {
+                match item {
+                    Item::Wand(_) => { *have_picked = true; return Some(","); },
+                    Item::Strange(_) => ()
+                }
+            },
+            LookFeet::UpStairs => *stairs = true,
+            LookFeet::DownStairs => *stairs = false,
+            LookFeet::Nothing => *stairs = false
+        }
+        *have_looked = true;
+    }
+    if *have_looked {
+        if let Some((dy, dx)) = get_wand_vector(term) {
+            if dy < north && dy > south && dx < west && dx > east {
+                *have_looked = false;
+                Some(get_direction_key(dx, dy))
+            } else {
+                Some(quit_string(*stairs))
+            }
+        } else {
+            Some(quit_string(*stairs))
+        }
+    } else {
+        Some(":")
+    }
+}
+
+const SHOW_CURSOR_SEQUENCE: &'static str = "\x1b[?25h";
+
+fn main() -> Result<()> {
     match fork_terminal()? {
         TermFork::Parent(pty_reader, mut pty_writer, mut terminal) => {
             let mut stdout = stdout().into_raw_mode().unwrap();
-            let stdin = stdin();
             let mut processor = Processor::new();
+            let mut read_buf= [0u8; 4096];
+            let mut have_looked = false;
+            let mut have_picked = true;
+            let mut stairs = false;
 
-            // spawn a background thread to deal with the input
-            
-            let _join_handler = thread::spawn(move || {
-                // loop over events on the term input,(_eventkey, bytevec)
-                // forward keys to child process
-                for event in stdin.events_and_raw() {
-                    if let Ok((_event, byte_vector)) = event {
-                        pty_writer.write(&byte_vector);
-                        pty_writer.flush();                        
-                    }
-                    //thread::sleep(Duration::from_millis(50));
-                }
-            });
-
-            // would like to abstract this raw_read stuff a bit,
-            // and just have a bytes iterator coming in, and being
-            // passed to processor.advance()
             for c in pty_reader {
-                // do stuff with received byte
                 processor.advance(&mut terminal, c, &mut stdout);
-                //thread::sleep(Duration::from_millis(50));
+                read_buf[read_buf.len() - 1] = c;
+                stdout.write(&read_buf[read_buf.len() - 1..])?;
+                stdout.flush()?;
+                if str::from_utf8(&read_buf[read_buf.len() - 6 ..]).unwrap() == SHOW_CURSOR_SEQUENCE {
+                    if let Some(out) = respond(&terminal, &read_buf, &mut have_picked, &mut have_looked, &mut stairs) {
+                        pty_writer.write(out.as_bytes())?;
+                    }
+                }
+                pty_writer.flush()?;
+                shift(&mut read_buf);
             }
-
             Ok(())
         },
         TermFork::Child => {
-            // Child process just exec `tty`
-            Command::new("tty").status().expect("could not execute tty");
-            //Command::new("stty").arg("-a").status().expect("could not execute stty -a");
-            //Command::new("nethack").status().expect("could not execute local nethack");
-            //Command::new("ssh").arg("hdf").status().expect("could not execute local nethack");
-            //Command::new("sh").status().expect("could not execute shell");
+            Command::new("nethack").status().expect("could not execute local nethack");
             Ok(())
         }
     }

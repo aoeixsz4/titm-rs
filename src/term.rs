@@ -30,6 +30,10 @@ impl PtyReader {
     }
 
     pub fn raw_read(&mut self) -> ioResult<usize> {
+        if self.bounds.0 == self.buffer.len() {
+            self.bounds.0 = 0;
+            self.bounds.1 = 0;
+        }
         let n = unistd::read(self.fd, &mut self.buffer[self.bounds.1 ..])
             // the map_err() bit allows us to convert to the correct
             // error type berfore applying ?
