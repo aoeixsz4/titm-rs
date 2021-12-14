@@ -1,27 +1,12 @@
-// new approach
-// we can use script -f in order to duplicate a session
-// i.e. say user is rxvt-unicode at /dev/pts/4, and we
-// have created a /dev/pts/5 that we own and control
-// we run script -f /dev/pts/5 on the shell running on
-// /dev/pts/4, and then run script -f /dev/pts/4 on our own
-// (or possibly do what script would do, directly - i think
-// it is essentially routing everything pts/4 to pts/5 and
-// vice-versa)
-
-// actually script is not designed in such a way that is ideal for our purposes
-// instead, we should create our own pts in which to run ssh/nethack,
-// while relaying I/O streams to the pts/tty within which we were called
-
-// it also isn't possible to have something like cat /dev/pts/n >/dev/pts/m
-// running in the background - 
-#![feature(iter_intersperse)]
 mod term;
 use crate::term::{fork_terminal, TermFork};
 use std::error;
+use std::str;
 use std::i32::MAX;
 use std::f64::MAX as MAX_FLOAT;
 use std::io::{stdout, stderr, Write};
 use std::process::Command;
+use regex::CaptureLocations;
 use terminal_emulator::ansi::Processor;
 use terminal_emulator::term::Term;
 use termion::raw::IntoRawMode;
@@ -50,24 +35,11 @@ fn calculate_distance(disty: i32, distx: i32) -> f64 {
     (f64::from(disty).powf(2.0) + f64::from(distx).powf(2.0)).sqrt()
 }
 
-fn get_direction(disty: i32, distx: i32) -> char {
-    if disty > 0 && distx > 0 {
-        'y'
-    } else if disty > 0 && distx == 0 {
-        'k'
-    } else if disty > 0 && distx < 0 {
-        'u'
-    } else if disty == 0 && distx < 0 {
-        'l'
-    } else if disty < 0 && distx < 0 {
-        'n'
-    } else if disty < 0 && distx == 0 {
-        'j'
-    } else if disty < 0 && distx > 0 {
-        'b'
-    } else {
-        'h'
-    }
+const DIRECTION_GRID: [[char; 3]; 3] = [['y','k','u'],['h','.','l'],['b','j','n']];
+
+fn get_direction_key(unit_vec: (i8, i8)) -> char {
+    let (x, y) = ((unit_vec.0 + 1), (unit_vec.1 + 1));
+    DIRECTION_GRID[y as usize][x as usize]
 }
 
 fn get_wand_vector(term: &Term) -> Option<(i32, i32)> {
@@ -94,30 +66,42 @@ fn shift(buf: &mut [u8]) {
     }
 }
 
-enum Item {
-    Wand(String),
-    Strange(String)
+enum Item<'a> {
+    Wand(&'a str),
+    Strange(&'a str)
 }
 
-enum LookFeet {
+enum LookFeet<'a> {
     Nothing,
-    Stairs,
-    Loot(Item)
+    UpStairs,
+    DownStairs,
+    Loot(Item<'a>)
 }
 
-fn parse_look_message(buf: &[u8]) -> Option<LookFeet> {
-    buf.rsplitn(10, |c| *c == b'\x1b')
-        .find(|s| s.len() >= 5 && &s[0..5] == "[0;1m".as_bytes())
-        .map_or(None, |s| {
+fn get_token<'a> (locs: &CaptureLocations, s: &'a str, i: usize) -> &'a str {
+    let (b, l) = locs.get(i).unwrap();
+    &s[b..l]
+}
+
+fn get_token_opt<'a> (locs: &CaptureLocations, s: &'a str, i: usize) -> Option<&'a str> {
+    if let Some((b, l)) = locs.get(i) {
+        Some(&s[b..l])
+    } else {
+        None
+    } 
+}
+
+fn parse_look_message<'a> (buf: &'a [u8]) -> Option<LookFeet<'a>> {
+    for bytes in buf.rsplitn(10, |c| *c == b'\x1b')
+        .find(|s| s.len() >= 5 && &s[0..5] == "[0;1m".as_bytes()) {
         let no_objects_re = Regex::new(
             r"You see no objects here\."
         ).unwrap();
-        let bytes_vector = s.to_vec();
-        let string = String::from_utf8(bytes_vector).unwrap();
+        let s = str::from_utf8(bytes).unwrap();
         
         let mut stderr = stderr().into_raw_mode().unwrap();
-        stderr.write(format!("{}\n", &string).as_bytes());
-        if no_objects_re.is_match(&string) {
+        stderr.write(format!("{}\n", s).as_bytes()).unwrap_or_else(|_e| 0);
+        if no_objects_re.is_match(s) {
             return Some(LookFeet::Nothing);
         }
         let re = Regex::new(
@@ -135,28 +119,31 @@ fn parse_look_message(buf: &[u8]) -> Option<LookFeet> {
                 : (?P<c>\d+)
             \))?\."
         ).unwrap();
-        for cap in re.captures_iter(&string) {
-            stderr.write(format!("{}, {}, {}", &cap[0].to_string(), &cap[1].to_string(), &cap[2].to_string()).as_bytes());
-            if cap[0].eq("There is a staircase up here.") {
-                return Some(LookFeet::Stairs);
-            }
-            if cap[1].eq("You see here") {
-                for i in 0 .. cap.len() {
-                    if cap[i].eq("wand") && i + 2 < cap.len() && cap[i+1].eq("of") {
-                        return Some(LookFeet::Loot(Item::Wand(cap[i+2].to_string())));
-                    } else if cap[i].eq("wand") {
-                        return Some(LookFeet::Loot(Item::Wand(cap[i-1].to_string())));
-                    }
-                }
-                return Some(LookFeet::Loot(Item::Strange(cap.iter().skip(2).map(|c|c.unwrap().as_str()).intersperse(" ").collect::<String>())));
-            }
+        let mut locs = re.capture_locations();
+        let first_match = re.captures_read(&mut locs, s);
+        if first_match.is_none() { return None; }
+        if get_token(&locs, s, 0) == "There is a staircase up here." {
+            return Some(LookFeet::UpStairs);
         }
-        None
-    })
+        if get_token(&locs, s, 0) == "There is a staircase down here." {
+            return Some(LookFeet::DownStairs);
+        }
+        if get_token(&locs, s, 1) == "You see here" {
+            let (item_type, item_description) = if let Some(_) = locs.get(5) {
+                (get_token(&locs, s, 4), get_token_opt(&locs, s, 6).unwrap_or(""))
+            } else {
+                (get_token(&locs, s, 6), get_token_opt(&locs, s, 4).unwrap_or(""))
+            };
+            if item_type == "wand" {
+                return Some(LookFeet::Loot(Item::Wand(item_description)));
+            }
+            return Some(LookFeet::Loot(Item::Strange(&s[13..])));
+        }
+    }
+    None
 }
 
 fn main() -> Result<()> {
-
     match fork_terminal()? {
         TermFork::Parent(pty_reader, mut pty_writer, mut terminal) => {
             let mut stdout = stdout().into_raw_mode().unwrap();
@@ -173,7 +160,7 @@ fn main() -> Result<()> {
                 read_buf[read_buf.len() - 1] = c;
                 stdout.write(&read_buf[read_buf.len() - 1..])?;
                 stdout.flush()?;
-                match String::from_utf8(read_buf[read_buf.len() - 6 ..].to_vec()).unwrap().as_str() {
+                match str::from_utf8(&read_buf[read_buf.len() - 6 ..]).unwrap() {
                     "\x1b[?25h" => {
                         let (north, south, east, west) = get_box(&terminal);
                         let at_feet = parse_look_message(&read_buf[read_buf.len() - 512 ..]);
@@ -192,7 +179,8 @@ fn main() -> Result<()> {
                                         }
                                     }
                                 },
-                                LookFeet::Stairs => stairs = true,
+                                LookFeet::UpStairs => stairs = true,
+                                LookFeet::DownStairs => stairs = false,
                                 LookFeet::Nothing => stairs = false
                             }
                             have_looked = true;
@@ -203,7 +191,8 @@ fn main() -> Result<()> {
                                 if dy < north && dy > south && dx < west && dx > east {
                                     stderr.write(format!("wand at location: {}, {}\n", dy, dx).as_bytes())?;
                                     stderr.flush()?;
-                                    pty_writer.write(get_direction(dy, dx).encode_utf8(&mut unicode_buf).as_bytes())?;
+                                    let unit_vec = ((dx/dx.abs()) as i8, (dy/dy.abs()) as i8);
+                                    pty_writer.write(get_direction_key(unit_vec).encode_utf8(&mut unicode_buf).as_bytes())?;
                                     have_looked = false;
                                 } else {
                                     if stairs {
@@ -228,7 +217,6 @@ fn main() -> Result<()> {
                 pty_writer.flush()?;
                 shift(&mut read_buf);
             }
-
             Ok(())
         },
         TermFork::Child => {
